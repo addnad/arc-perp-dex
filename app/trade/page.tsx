@@ -4,33 +4,49 @@ import { useEffect, useState } from "react"
 import { ethers } from "ethers"
 import { Button } from "@/components/ui/button"
 
-const PERP_ADDRESS = "0x111EDB4B795119BeC5BF1A2d92CE2F3f4a3BAbAC"
-const USDC_ADDRESS = "0x3600000000000000000000000000000000000000" // Updated USDC contract address to correct Arc testnet address
+const CONTRACT_ADDRESS = "0x25491Abd75Ac5678DeEB385b9f073c2323ECa1E3"
+const USDC_ADDRESS = "0x3600000000000000000000000000000000000000"
 
 const PERP_ABI = [
-  "function openPosition(uint256 margin, uint256 leverage, bool isLong)",
-  "function getPosition(address user) view returns (uint256, uint256, bool, uint256)",
-  "function minimumMargin() view returns (uint256)",
+  "function updatePrice(string asset, uint256 newPrice) external",
+  "function getPrice(string asset) view returns (uint256)",
+  "function openPosition(string asset, uint256 amount) external",
+  "function closePosition(string asset, uint256 amount) external",
+  "event PriceUpdated(string asset, uint256 newPrice)",
+  "event PositionOpened(address user, string asset, uint256 amount, uint256 price)",
+  "event PositionClosed(address user, string asset, uint256 amount, uint256 price)",
 ]
+
 const USDC_ABI = [
   "function approve(address spender, uint256 amount) external returns (bool)",
   "function allowance(address owner, address spender) external view returns (uint256)",
   "function balanceOf(address account) external view returns (uint256)",
 ]
 
-const PAIRS = {
-  BTC: { cg: "bitcoin", tv: "BINANCE:BTCUSDT" },
-  ETH: { cg: "ethereum", tv: "BINANCE:ETHUSDT" },
-  SOL: { cg: "solana", tv: "BINANCE:SOLUSDT" },
-  AVAX: { cg: "avalanche-2", tv: "BINANCE:AVAXUSDT" },
-  ADA: { cg: "cardano", tv: "BINANCE:ADAUSDT" },
-  XRP: { cg: "ripple", tv: "BINANCE:XRPUSDT" },
-  DOT: { cg: "polkadot", tv: "BINANCE:DOTUSDT" },
-  LINK: { cg: "chainlink", tv: "BINANCE:LINKUSDT" },
+const BINANCE_SYMBOLS: Record<string, string> = {
+  BTC: "BTCUSDT",
+  ETH: "ETHUSDT",
+  SOL: "SOLUSDT",
+  AVAX: "AVAXUSDT",
+  ADA: "ADAUSDT",
+  XRP: "XRPUSDT",
+  DOT: "DOTUSDT",
+  LINK: "LINKUSDT",
+}
+
+const TRADINGVIEW_PAIRS: Record<string, string> = {
+  BTC: "BINANCE:BTCUSDT",
+  ETH: "BINANCE:ETHUSDT",
+  SOL: "BINANCE:SOLUSDT",
+  AVAX: "BINANCE:AVAXUSDT",
+  ADA: "BINANCE:ADAUSDT",
+  XRP: "BINANCE:XRPUSDT",
+  DOT: "BINANCE:DOTUSDT",
+  LINK: "BINANCE:LINKUSDT",
 }
 
 async function switchToArc() {
-  const chainId = "0x4CEF52" // Arc Testnet correct chain ID
+  const chainId = "0x4CEF52"
   try {
     await window.ethereum.request({
       method: "wallet_switchEthereumChain",
@@ -54,33 +70,42 @@ async function switchToArc() {
   }
 }
 
+async function fetchBinancePrice(asset: string): Promise<bigint> {
+  const res = await fetch(`/api/binance-price?asset=${asset}`)
+  const data = await res.json()
+
+  if (data.error) {
+    throw new Error(data.error)
+  }
+
+  return BigInt(data.price8)
+}
+
 export default function TradePage() {
   const [pair, setPair] = useState("BTC")
   const [price, setPrice] = useState<number | null>(null)
   const [priceChange, setPriceChange] = useState<number>(0)
-  const [margin, setMargin] = useState("")
-  const [leverage, setLeverage] = useState(5)
+  const [amount, setAmount] = useState("")
   const [wallet, setWallet] = useState<any>(null)
   const [balance, setBalance] = useState<string>("0")
   const [loading, setLoading] = useState(false)
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
 
-  // Fetch price
   useEffect(() => {
     async function loadPrice() {
       try {
-        const res = await fetch(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${PAIRS[pair as keyof typeof PAIRS].cg}&vs_currencies=usd&include_24hr_change=true`,
-        )
+        const symbol = BINANCE_SYMBOLS[pair]
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${symbol}`)
         const data = await res.json()
-        const cgId = PAIRS[pair as keyof typeof PAIRS].cg
-        setPrice(data[cgId].usd)
-        setPriceChange(data[cgId].usd_24h_change || 0)
+        setPrice(Number.parseFloat(data.lastPrice))
+        setPriceChange(Number.parseFloat(data.priceChangePercent))
+        setLastUpdate(new Date())
       } catch (error) {
         console.error("Error fetching price:", error)
       }
     }
     loadPrice()
-    const interval = setInterval(loadPrice, 30000)
+    const interval = setInterval(loadPrice, 10000) // Update every 10 seconds
     return () => clearInterval(interval)
   }, [pair])
 
@@ -97,7 +122,7 @@ export default function TradePage() {
       if (window.TradingView) {
         new window.TradingView.widget({
           autosize: true,
-          symbol: PAIRS[pair as keyof typeof PAIRS].tv,
+          symbol: TRADINGVIEW_PAIRS[pair],
           interval: "15",
           timezone: "Etc/UTC",
           theme: "dark",
@@ -122,7 +147,7 @@ export default function TradePage() {
       try {
         const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, wallet.provider)
         const balanceWei = await usdcContract.balanceOf(wallet.address)
-        setBalance(ethers.formatUnits(balanceWei, 6)) // USDC has 6 decimals
+        setBalance(ethers.formatUnits(balanceWei, 6))
       } catch (error) {
         console.error("Error fetching balance:", error)
       }
@@ -148,68 +173,50 @@ export default function TradePage() {
     }
   }
 
-  async function executeTrade(isLong: boolean) {
+  async function executeTrade(isOpen: boolean) {
     if (!wallet) {
       await connectWallet()
       return
     }
-    if (!margin || Number(margin) <= 0) {
-      alert("Please enter margin amount")
+    if (!amount || Number(amount) <= 0) {
+      alert("Please enter amount")
       return
     }
 
     try {
       setLoading(true)
 
-      const contract = new ethers.Contract(PERP_ADDRESS, PERP_ABI, wallet.provider)
-      try {
-        console.log("[v0] Verifying contract at:", PERP_ADDRESS)
-        const minMargin = await contract.minimumMargin()
-        console.log("[v0] Contract verified. Minimum margin:", minMargin.toString())
-      } catch (verifyError: any) {
-        console.error("[v0] Contract verification failed:", verifyError)
-        alert(
-          "The perpetual contract at this address is not responding. Please check the contract address is correct for Arc testnet.",
-        )
-        return
-      }
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, wallet.signer)
 
-      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, wallet.signer)
-      const marginAmount = ethers.parseUnits(margin, 6) // USDC has 6 decimals
+      // Update price on-chain first
+      console.log(`[v0] Fetching ${pair} price from Binance...`)
+      const price8 = await fetchBinancePrice(pair)
+      console.log(`[v0] Updating price on-chain: ${Number(price8) / 1e8}`)
 
-      console.log("[v0] Checking USDC allowance...")
-      const allowance = await usdcContract.allowance(wallet.address, PERP_ADDRESS)
+      const updateTx = await contract.updatePrice(pair, price8)
+      await updateTx.wait()
+      console.log(`[v0] Price updated on-chain`)
 
-      if (allowance < marginAmount) {
-        console.log("[v0] Approving USDC spending...")
-        const approveTx = await usdcContract.approve(PERP_ADDRESS, ethers.parseUnits("1000000", 6)) // Approve large amount
-        await approveTx.wait()
-        console.log("[v0] USDC approved successfully")
-      }
+      // Execute trade
+      const amountWei = ethers.parseUnits(amount, 18)
+      console.log(`[v0] ${isOpen ? "Opening" : "Closing"} position for ${amount} ${pair}`)
 
-      const contractWithSigner = new ethers.Contract(PERP_ADDRESS, PERP_ABI, wallet.signer)
-      console.log("[v0] Opening position with margin:", margin, "leverage:", leverage, "isLong:", isLong)
-      console.log("[v0] Margin amount (raw):", marginAmount.toString())
+      const tx = isOpen ? await contract.openPosition(pair, amountWei) : await contract.closePosition(pair, amountWei)
 
-      const tx = await contractWithSigner.openPosition(marginAmount, leverage, isLong)
-      console.log("[v0] Transaction sent:", tx.hash)
-
+      console.log(`[v0] Transaction sent:`, tx.hash)
       await tx.wait()
-      console.log("[v0] Position opened successfully!")
-      alert(`${isLong ? "Long" : "Short"} position opened successfully!`)
-      setMargin("")
+
+      alert(`${isOpen ? "Opened" : "Closed"} ${amount} ${pair} position successfully!`)
+      setAmount("")
+
+      // Refresh balance
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, wallet.provider)
+      const balanceWei = await usdcContract.balanceOf(wallet.address)
+      setBalance(ethers.formatUnits(balanceWei, 6))
     } catch (error: any) {
-      console.error("Trade error:", error)
+      console.error("[v0] Trade error:", error)
       let errorMsg = "Transaction failed: "
-      if (error.code === "CALL_EXCEPTION") {
-        errorMsg += "The contract rejected your transaction. This could mean:\n"
-        errorMsg += "- The contract address is incorrect for Arc testnet\n"
-        errorMsg += "- Your margin is below the minimum required\n"
-        errorMsg += "- There's insufficient liquidity\n"
-        errorMsg += "\nPlease verify the contract address with the Arc testnet documentation."
-      } else if (error.code === "INSUFFICIENT_FUNDS") {
-        errorMsg = "Insufficient USDC balance"
-      } else if (error.reason) {
+      if (error.reason) {
         errorMsg += error.reason
       } else if (error.message) {
         errorMsg += error.message
@@ -242,7 +249,7 @@ export default function TradePage() {
 
       {/* Pair Selector */}
       <div className="flex gap-3 mb-4 flex-wrap">
-        {Object.keys(PAIRS).map((p) => (
+        {Object.keys(BINANCE_SYMBOLS).map((p) => (
           <Button
             key={p}
             variant={pair === p ? "default" : "outline"}
@@ -256,20 +263,30 @@ export default function TradePage() {
 
       {/* Price Display */}
       <div className="mb-4 bg-card p-4 rounded-lg border border-border">
-        <div className="text-sm text-muted-foreground mb-1">{pair}/USDC</div>
-        <div className="flex items-center gap-3">
-          <div className="text-3xl font-bold">
-            {price
-              ? `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : "Loading..."}
+        <div className="flex justify-between items-start">
+          <div>
+            <div className="text-sm text-muted-foreground mb-1">{pair}/USDC</div>
+            <div className="flex items-center gap-3">
+              <div className="text-3xl font-bold">
+                {price
+                  ? `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : "Loading..."}
+              </div>
+              {priceChange !== 0 && (
+                <div className={`text-sm font-medium ${priceChange > 0 ? "text-success" : "text-destructive"}`}>
+                  {priceChange > 0 ? "+" : ""}
+                  {priceChange.toFixed(2)}%
+                </div>
+              )}
+            </div>
           </div>
-          {priceChange !== 0 && (
-            <div className={`text-sm font-medium ${priceChange > 0 ? "text-success" : "text-destructive"}`}>
-              {priceChange > 0 ? "+" : ""}
-              {priceChange.toFixed(2)}%
+          {lastUpdate && (
+            <div className="text-xs text-muted-foreground">
+              Updated {Math.floor((Date.now() - lastUpdate.getTime()) / 1000)}s ago
             </div>
           )}
         </div>
+        <div className="text-xs text-muted-foreground mt-2">Live price from Binance Perpetual Futures</div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -282,45 +299,17 @@ export default function TradePage() {
         <div className="bg-card p-6 rounded-lg border border-border h-fit">
           <h2 className="text-xl font-bold mb-4">Trade</h2>
 
-          {/* Margin Input */}
+          {/* Amount Input */}
           <div className="mb-4">
-            <label className="text-sm text-muted-foreground mb-2 block">Margin (USDC)</label>
+            <label className="text-sm text-muted-foreground mb-2 block">Amount ({pair})</label>
             <input
               type="number"
-              value={margin}
-              onChange={(e) => setMargin(e.target.value)}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
               placeholder="0.00"
               className="w-full p-3 bg-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
-
-          {/* Leverage Slider */}
-          <div className="mb-6">
-            <div className="flex justify-between text-sm text-muted-foreground mb-2">
-              <span>Leverage</span>
-              <span className="font-bold text-foreground">{leverage}x</span>
-            </div>
-            <input
-              type="range"
-              min="1"
-              max="50"
-              value={leverage}
-              onChange={(e) => setLeverage(Number(e.target.value))}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>1x</span>
-              <span>50x</span>
-            </div>
-          </div>
-
-          {/* Position Size */}
-          {margin && (
-            <div className="mb-6 p-3 bg-background rounded-lg border border-border">
-              <div className="text-sm text-muted-foreground">Position Size</div>
-              <div className="text-lg font-bold">${(Number(margin) * leverage).toFixed(2)}</div>
-            </div>
-          )}
 
           {/* Trade Buttons */}
           <div className="flex gap-3">
@@ -329,16 +318,20 @@ export default function TradePage() {
               onClick={() => executeTrade(true)}
               className="flex-1 bg-gradient-to-r from-success to-success/80 hover:from-success/90 hover:to-success/70 text-white font-bold py-6"
             >
-              {loading ? "Processing..." : "Long"}
+              {loading ? "Processing..." : "Open Long"}
             </Button>
             <Button
               disabled={loading}
               onClick={() => executeTrade(false)}
               className="flex-1 bg-gradient-to-r from-destructive to-destructive/80 hover:from-destructive/90 hover:to-destructive/70 text-white font-bold py-6"
             >
-              {loading ? "Processing..." : "Short"}
+              {loading ? "Processing..." : "Close Position"}
             </Button>
           </div>
+
+          <p className="text-xs text-muted-foreground mt-4 text-center">
+            Prices are fetched from Binance and updated on-chain before each trade
+          </p>
         </div>
       </div>
     </div>
