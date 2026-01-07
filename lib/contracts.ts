@@ -9,11 +9,14 @@ export const USDC_ABI = [
 ]
 
 export const ARC_PERP_VAULT_ABI = [
-  "function openPosition(uint256 margin, uint256 leverage, bool isLong) external",
-  "function positions(address) view returns (uint256 size, uint256 entryPrice, uint256 margin, bool isLong)",
-  "function getPnl(address user) view returns (int256)",
-  "function usdc() view returns (address)",
-  "function oracle() view returns (address)",
+  "function openPosition(string asset, int8 leverage) external payable",
+  "function closePosition(string asset) external",
+  "function positions(address user, string asset) view returns (int256 size, uint256 entryPrice, uint256 margin)",
+  "function getPrice(string asset) view returns (uint256)",
+  "function updatePrice(string asset, uint256 price) external",
+  "function getRecentTrades(uint256 limit) view returns (tuple(address user, uint256 margin, int8 leverage, bool isLong, uint256 entryPrice, uint256 exitPrice, int256 pnl, uint256 timestamp)[])",
+  "event PositionOpened(address indexed user, string asset, int256 size, uint256 price, uint256 margin)",
+  "event PositionClosed(address indexed user, string asset, int256 pnl)",
 ]
 
 export const ARC_PRICE_ORACLE_ABI = [
@@ -24,9 +27,9 @@ export const ARC_PRICE_ORACLE_ABI = [
 
 // Contract addresses on Arc Testnet
 export const CONTRACTS = {
-  USDC: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
-  ARC_PERP_VAULT: "0x0000000000000000000000000000000000000000", // To be deployed
-  ARC_PRICE_ORACLE: "0x0000000000000000000000000000000000000000", // To be deployed
+  USDC: "0x3600000000000000000000000000000000000000",
+  ARC_PERP_VAULT: "0xF2d1584EDF324bee38b2B200e48e820447B85D0F",
+  ARC_PRICE_ORACLE: "0x0000000000000000000000000000000000000000",
 }
 
 // Helper to convert USDC amount to wei (USDC has 18 decimals on Arc)
@@ -86,7 +89,7 @@ export async function executeTradeOnChain(
 
     console.log("[v0] Opening position:", { margin, leverage, isLong })
 
-    const tx = await vaultContract.openPosition(marginWei, leverage, isLong)
+    const tx = await vaultContract.openPosition("USDC", leverage, { value: marginWei })
     console.log("[v0] Transaction sent:", tx.hash)
 
     const receipt = await tx.wait()
@@ -110,18 +113,29 @@ export async function getUserPosition(
 } | null> {
   try {
     const vaultContract = new ethers.Contract(CONTRACTS.ARC_PERP_VAULT, ARC_PERP_VAULT_ABI, provider)
-    const position = await vaultContract.positions(address)
+    const position = await vaultContract.positions(address, "USDC")
 
     if (position.size === 0n) return null
 
     return {
-      size: weiToUsdc(position.size),
+      size: Number(position.size),
       entryPrice: Number(position.entryPrice) / 1e8,
       margin: weiToUsdc(position.margin),
-      isLong: position.isLong,
+      isLong: position.size > 0,
     }
   } catch (error) {
     console.error("[v0] Error getting position:", error)
     return null
+  }
+}
+
+export async function getRecentTrades(provider: ethers.BrowserProvider, limit: number): Promise<any[]> {
+  try {
+    const vaultContract = new ethers.Contract(CONTRACTS.ARC_PERP_VAULT, ARC_PERP_VAULT_ABI, provider)
+    const trades = await vaultContract.getRecentTrades(limit)
+    return trades
+  } catch (error) {
+    console.error("[v0] Error getting recent trades:", error)
+    return []
   }
 }

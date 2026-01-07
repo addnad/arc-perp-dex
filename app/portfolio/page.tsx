@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react"
 import { ethers } from "ethers"
-import { Navigation } from "@/components/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { RefreshCw } from "lucide-react"
@@ -54,24 +53,6 @@ export default function PortfolioPage() {
     }
   }
 
-  const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert("Please install MetaMask")
-      return
-    }
-    try {
-      const prov = new ethers.BrowserProvider(window.ethereum)
-      await prov.send("eth_requestAccounts", [])
-      const signer = await prov.getSigner()
-      const address = await signer.getAddress()
-      setWallet({ provider: prov, signer, address })
-      setProvider(prov)
-      fetchPortfolioData(address, prov)
-    } catch (error) {
-      console.error("Connection error:", error)
-    }
-  }
-
   const fetchPortfolioData = async (address?: string, prov = provider) => {
     if (!prov || (!address && !wallet)) return
     setLoading(true)
@@ -79,10 +60,9 @@ export default function PortfolioPage() {
     try {
       const userAddress = address || wallet.address
       const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, prov)
-      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, prov)
 
       const balWei = await prov.getBalance(userAddress)
-      const balFormatted = ethers.formatUnits(balWei, 6)
+      const balFormatted = ethers.formatUnits(balWei, 18)
       setUsdcBalance(balFormatted)
 
       const newPositions: Record<
@@ -93,7 +73,7 @@ export default function PortfolioPage() {
 
       for (const asset of ASSETS) {
         const sizeRaw: bigint = await contract.positionSizes(userAddress, asset)
-        const size = Number(sizeRaw) / 1e10 // Approximate adjustment
+        const size = Number(sizeRaw) / 1e10
 
         if (size !== 0) {
           const entry8 = await contract.entryPrices(userAddress, asset)
@@ -131,31 +111,21 @@ export default function PortfolioPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navigation />
       <main className="container mx-auto px-4 py-20">
         <div className="mx-auto max-w-4xl">
           <div className="mb-8 flex items-center justify-between">
             <h1 className="text-4xl font-bold">Portfolio</h1>
-            <div className="flex gap-3">
-              {wallet && (
-                <Button onClick={() => fetchPortfolioData()} disabled={loading} variant="outline" size="sm">
-                  <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                </Button>
-              )}
-              {!wallet && (
-                <Button onClick={connectWallet} className="bg-gradient-to-r from-primary to-accent">
-                  Connect Wallet
-                </Button>
-              )}
-            </div>
+            {wallet && (
+              <Button onClick={() => fetchPortfolioData()} disabled={loading} variant="outline" size="sm">
+                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              </Button>
+            )}
           </div>
 
           {!wallet ? (
             <Card className="glass-card border-border/50 p-12 text-center">
               <p className="mb-4 text-lg text-muted-foreground">Connect your wallet to view your portfolio</p>
-              <Button onClick={connectWallet} className="bg-gradient-to-r from-primary to-accent">
-                Connect Wallet
-              </Button>
+              <p className="text-sm text-muted-foreground">Use the "Connect Wallet" button in the top navigation</p>
             </Card>
           ) : (
             <>

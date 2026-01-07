@@ -1,66 +1,23 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { Activity, Menu, X, Wallet } from "lucide-react"
+import { Activity, Menu, X, Wallet, LogOut, Droplet } from "lucide-react"
 import Link from "next/link"
-import { useState, useEffect } from "react"
-import { connectWallet, fetchUsdcBalance, formatAddress } from "@/lib/wallet"
-import type { ethers } from "ethers"
+import { useState } from "react"
+import { useWallet } from "@/lib/wallet-context"
+import { formatAddress } from "@/lib/wallet"
 
 export function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [wallet, setWallet] = useState<{
-    provider: ethers.BrowserProvider
-    signer: ethers.Signer
-    address: string
-  } | null>(null)
-  const [usdcBalance, setUsdcBalance] = useState<number | null>(null)
-  const [isConnecting, setIsConnecting] = useState(false)
-
-  useEffect(() => {
-    checkWalletConnection()
-  }, [])
-
-  useEffect(() => {
-    if (wallet) {
-      fetchBalance()
-      const interval = setInterval(fetchBalance, 10000)
-      return () => clearInterval(interval)
-    }
-  }, [wallet])
-
-  const checkWalletConnection = async () => {
-    if (typeof window.ethereum !== "undefined") {
-      try {
-        const accounts = await window.ethereum.request({ method: "eth_accounts" })
-        if (accounts.length > 0) {
-          await handleConnect()
-        }
-      } catch (error) {
-        console.error("Error checking wallet connection:", error)
-      }
-    }
-  }
-
-  const fetchBalance = async () => {
-    if (wallet) {
-      const balance = await fetchUsdcBalance(wallet.provider, wallet.address)
-      setUsdcBalance(balance)
-    }
-  }
+  const { wallet, usdcBalance, isConnecting, connect, disconnect } = useWallet()
 
   const handleConnect = async () => {
     try {
-      setIsConnecting(true)
-      const walletData = await connectWallet()
-      if (walletData) {
-        setWallet(walletData)
-      }
+      await connect()
     } catch (error: any) {
       console.error("Error connecting wallet:", error)
       const errorMessage = error.message || "Failed to connect wallet. Please try again."
 
-      // Use a custom styled alert for preview environment
       if (errorMessage.includes("preview mode")) {
         alert(
           "🔒 Preview Mode Limitation\n\n" +
@@ -73,14 +30,7 @@ export function Navigation() {
       } else {
         alert(errorMessage)
       }
-    } finally {
-      setIsConnecting(false)
     }
-  }
-
-  const disconnectWallet = () => {
-    setWallet(null)
-    setUsdcBalance(null)
   }
 
   return (
@@ -106,14 +56,8 @@ export function Navigation() {
             <Link href="/portfolio" className="text-sm font-medium transition-colors hover:text-primary">
               Portfolio
             </Link>
-            <Link href="/swap" className="text-sm font-medium transition-colors hover:text-primary">
-              Swap
-            </Link>
             <Link href="/leaderboard" className="text-sm font-medium transition-colors hover:text-primary">
               Leaderboard
-            </Link>
-            <Link href="/docs" className="text-sm font-medium transition-colors hover:text-primary">
-              Docs
             </Link>
           </div>
 
@@ -123,6 +67,16 @@ export function Navigation() {
               <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
               Arc Testnet
             </div>
+            <Link href="/faucet" target="_blank" rel="noopener noreferrer">
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-blue-500/30 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+              >
+                <Droplet className="mr-2 h-4 w-4" />
+                Faucet
+              </Button>
+            </Link>
             {wallet ? (
               <div className="flex items-center gap-3">
                 {usdcBalance !== null && (
@@ -134,10 +88,17 @@ export function Navigation() {
                   size="sm"
                   variant="outline"
                   className="border-primary/30 bg-primary/10 text-primary hover:bg-primary/20"
-                  onClick={disconnectWallet}
                 >
                   <Wallet className="mr-2 h-4 w-4" />
                   {formatAddress(wallet.address)}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                  onClick={disconnect}
+                >
+                  <LogOut className="h-4 w-4" />
                 </Button>
               </div>
             ) : (
@@ -166,14 +127,18 @@ export function Navigation() {
               <Link href="/portfolio" className="text-sm font-medium">
                 Portfolio
               </Link>
-              <Link href="/swap" className="text-sm font-medium">
-                Swap
-              </Link>
               <Link href="/leaderboard" className="text-sm font-medium">
                 Leaderboard
               </Link>
-              <Link href="/docs" className="text-sm font-medium">
-                Docs
+              <Link href="/faucet" target="_blank" rel="noopener noreferrer">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full border-blue-500/30 bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+                >
+                  <Droplet className="mr-2 h-4 w-4" />
+                  Faucet
+                </Button>
               </Link>
               {wallet ? (
                 <>
@@ -182,14 +147,18 @@ export function Navigation() {
                       {usdcBalance.toFixed(2)} USDC
                     </div>
                   )}
+                  <Button size="sm" variant="outline" className="w-full border-primary/30 bg-primary/10 text-primary">
+                    <Wallet className="mr-2 h-4 w-4" />
+                    {formatAddress(wallet.address)}
+                  </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="w-full border-primary/30 bg-primary/10 text-primary"
-                    onClick={disconnectWallet}
+                    className="w-full border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                    onClick={disconnect}
                   >
-                    <Wallet className="mr-2 h-4 w-4" />
-                    {formatAddress(wallet.address)}
+                    <LogOut className="mr-2 h-4 w-4" />
+                    Disconnect
                   </Button>
                 </>
               ) : (

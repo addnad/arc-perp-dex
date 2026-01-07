@@ -3,9 +3,8 @@
 import { useEffect, useState } from "react"
 import { ethers } from "ethers"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Line } from "react-chartjs-2"
+import { ArrowUpRight, ArrowDownRight, ChevronDown } from "lucide-react"
+import { useWallet } from "@/lib/wallet-context"
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -31,83 +30,89 @@ const PERP_ABI = [
   "function positionSizes(address user, string asset) view returns (int256)",
   "function entryPrices(address user, string asset) view returns (uint256)",
   "function margins(address user, string asset) view returns (uint256)",
-  "event PriceUpdated(string asset, uint256 newPrice)",
-  "event PositionOpened(address indexed user, string asset, int256 size, uint256 price, uint256 margin)",
-  "event PositionClosed(address indexed user, string asset, int256 size, uint256 price, int256 pnl)",
 ]
 
-const ASSETS = ["BTC", "ETH"]
+const ASSETS = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "MATIC", "DOT", "AVAX", "LINK", "UNI"]
 
 const COINGECKO_IDS: Record<string, string> = {
   BTC: "bitcoin",
   ETH: "ethereum",
+  SOL: "solana",
+  BNB: "binancecoin",
+  XRP: "ripple",
+  ADA: "cardano",
+  DOGE: "dogecoin",
+  MATIC: "matic-network",
+  DOT: "polkadot",
+  AVAX: "avalanche-2",
+  LINK: "chainlink",
+  UNI: "uniswap",
 }
 
 const TRADINGVIEW_PAIRS: Record<string, string> = {
   BTC: "BINANCE:BTCUSDT",
   ETH: "BINANCE:ETHUSDT",
+  SOL: "BINANCE:SOLUSDT",
+  BNB: "BINANCE:BNBUSDT",
+  XRP: "BINANCE:XRPUSDT",
+  ADA: "BINANCE:ADAUSDT",
+  DOGE: "BINANCE:DOGEUSDT",
+  MATIC: "BINANCE:MATICUSDT",
+  DOT: "BINANCE:DOTUSDT",
+  AVAX: "BINANCE:AVAXUSDT",
+  LINK: "BINANCE:LINKUSDT",
+  UNI: "BINANCE:UNIUSDT",
 }
 
-async function switchToArc() {
-  const chainId = "0x4CEF52"
-  try {
-    await window.ethereum.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId }],
-    })
-  } catch (e: any) {
-    if (e.code === 4902) {
-      await window.ethereum.request({
-        method: "wallet_addEthereumChain",
-        params: [
-          {
-            chainId,
-            chainName: "Arc Testnet",
-            nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-            rpcUrls: ["https://rpc.testnet.arc.network"],
-            blockExplorerUrls: ["https://testnet.arcscan.app"],
-          },
-        ],
-      })
-    }
-  }
-}
+const priceCache = new Map<string, { price: number; timestamp: number }>()
+const CACHE_DURATION = 30000 // 30 seconds
 
 async function fetchCoinGeckoPrice(asset: string): Promise<bigint> {
-  const res = await fetch(`/api/coingecko-price?asset=${asset}`)
-  const data = await res.json()
-
-  if (data.error) {
-    throw new Error(data.error)
+  // Check cache first
+  const cached = priceCache.get(asset)
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    console.log(`[v0] Using cached price for ${asset}: ${cached.price}`)
+    return BigInt(Math.floor(cached.price * 1e8))
   }
 
-  return BigInt(data.price8)
+  try {
+    const res = await fetch(`/api/coingecko-price?asset=${asset}`)
+    const data = await res.json()
+    if (data.error) throw new Error(data.error)
+
+    // Cache the price
+    const priceNum = Number(data.price8) / 1e8
+    priceCache.set(asset, { price: priceNum, timestamp: Date.now() })
+
+    return BigInt(data.price8)
+  } catch (error) {
+    console.error(`[v0] Error fetching price for ${asset}:`, error)
+    // Return cached price if available, even if expired
+    if (cached) {
+      console.log(`[v0] Using expired cache for ${asset}: ${cached.price}`)
+      return BigInt(Math.floor(cached.price * 1e8))
+    }
+    throw error
+  }
 }
 
 export default function TradePage() {
+  const { wallet, usdcBalance } = useWallet()
+
   const [pair, setPair] = useState("BTC")
+  const [showMarketDropdown, setShowMarketDropdown] = useState(false)
   const [price, setPrice] = useState<number | null>(null)
   const [priceChange, setPriceChange] = useState<number>(0)
+  const [volume24h, setVolume24h] = useState<number>(0)
   const [amount, setAmount] = useState("")
   const [leverage, setLeverage] = useState(10)
-  const [tpPrice, setTpPrice] = useState("")
-  const [slPrice, setSlPrice] = useState("")
-  const [wallet, setWallet] = useState<any>(null)
-  const [balance, setBalance] = useState<string>("0")
   const [loading, setLoading] = useState(false)
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [provider, setProvider] = useState<any>(null)
-  const [hasPosition, setHasPosition] = useState<Record<string, boolean>>({})
-  const [positionDetails, setPositionDetails] = useState<
-    Record<
-      string,
-      { size: string; entryPrice: number; margin: string; pnl: string; tp?: string; sl?: string; direction?: string }
-    >
-  >({})
-  const [priceHistory, setPriceHistory] = useState<{ labels: string[]; data: number[] }>({
-    labels: [],
-    data: [],
-  })
+  const [positions, setPositions] = useState<any[]>([])
+  const [orderBookBids, setOrderBookBids] = useState<any[]>([])
+  const [orderBookAsks, setOrderBookAsks] = useState<any[]>([])
+  const [timeframe, setTimeframe] = useState("15m")
+  const [balance, setBalance] = useState<number | null>(null)
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.ethereum) {
@@ -120,40 +125,32 @@ export default function TradePage() {
   }, [])
 
   useEffect(() => {
-    async function loadPrice() {
+    async function loadMarketData() {
       try {
-        const coinId = COINGECKO_IDS[pair]
-        const res = await fetch(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${coinId}&vs_currencies=usd&include_24hr_change=true`,
-        )
+        const res = await fetch(`/api/coingecko-price?asset=${pair}`)
         const data = await res.json()
-        const currentPrice = data[coinId]?.usd || 0
-        setPrice(currentPrice)
-        setPriceChange(data[coinId]?.usd_24h_change || 0)
-        setLastUpdate(new Date())
 
-        setPriceHistory((prev) => {
-          const newData = [...prev.data, currentPrice].slice(-20)
-          const newLabels = [...prev.labels, new Date().toLocaleTimeString()].slice(-20)
-          return { labels: newLabels, data: newData }
-        })
+        if (data.error) {
+          console.error("Error fetching market data:", data.error)
+          return
+        }
+
+        // Convert price8 (8 decimals) to regular price
+        const currentPrice = Number(data.price8) / 1e8
+        setPrice(currentPrice)
+
+        // For now, we'll use mock data for 24h change and volume
+        // You can enhance the API route later to include these
+        setPriceChange(Math.random() * 10 - 5) // Mock: random between -5% and +5%
+        setVolume24h(Math.random() * 1e9) // Mock: random volume
       } catch (error) {
-        console.error("Error fetching price:", error)
+        console.error("Error fetching market data:", error)
       }
     }
-    loadPrice()
-    const interval = setInterval(loadPrice, 10000)
+    loadMarketData()
+    const interval = setInterval(loadMarketData, 10000)
     return () => clearInterval(interval)
   }, [pair])
-
-  useEffect(() => {
-    if (!wallet || !provider) return
-    const interval = setInterval(() => {
-      checkAllPositions()
-      checkTpSlTriggers()
-    }, 15000)
-    return () => clearInterval(interval)
-  }, [wallet, provider, pair])
 
   useEffect(() => {
     const el = document.getElementById("tv-chart")
@@ -168,120 +165,113 @@ export default function TradePage() {
         new window.TradingView.widget({
           autosize: true,
           symbol: TRADINGVIEW_PAIRS[pair],
-          interval: "15",
+          interval: timeframe.replace("m", "").replace("h", "0").replace("D", "D"),
           timezone: "Etc/UTC",
           theme: "dark",
           style: "1",
           locale: "en",
-          toolbar_bg: "#0b0b14",
+          toolbar_bg: "#0a0a0f",
           enable_publishing: false,
           hide_side_toolbar: false,
           allow_symbol_change: false,
           container_id: "tv-chart",
-          backgroundColor: "#0b0b14",
+          backgroundColor: "#0a0a0f",
         })
       }
     }
     document.body.appendChild(script)
-  }, [pair])
+  }, [pair, timeframe])
 
   useEffect(() => {
     async function getBalance() {
       if (!wallet || !provider) return
       try {
         const bal = await provider.getBalance(wallet.address)
-        const balanceFormatted = ethers.formatUnits(bal, 18)
-        setBalance(balanceFormatted)
+        setBalance(ethers.formatUnits(bal, 18))
       } catch (error) {
-        console.error("Error fetching USDC balance:", error)
+        console.error("Error fetching balance:", error)
       }
     }
     getBalance()
   }, [wallet, provider])
 
   useEffect(() => {
-    checkAllPositions()
-  }, [wallet, provider, pair])
+    async function loadPositions() {
+      if (!wallet || !provider) return
+      try {
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, provider)
+        const loadedPositions = []
 
-  const checkAllPositions = async () => {
-    if (!wallet || !provider) return
-    try {
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, provider)
+        for (const asset of ASSETS) {
+          const positionSize: bigint = await contract.positionSizes(wallet.address, asset)
+          if (positionSize !== 0n) {
+            const entry8 = await contract.entryPrices(wallet.address, asset)
+            const marginWei = await contract.margins(wallet.address, asset)
 
-      for (const asset of ASSETS) {
-        const positionSize: bigint = await contract.positionSizes(wallet.address, asset)
-        const hasPos = positionSize !== 0n
-        setHasPosition((prev) => ({ ...prev, [asset]: hasPos }))
+            let pnl = "0.00"
+            try {
+              const currentPrice8 = await fetchCoinGeckoPrice(asset)
+              const entryPrice = Number(entry8) / 1e8
+              const currentPrice = Number(currentPrice8) / 1e8
 
-        if (hasPos) {
-          const entry8 = await contract.entryPrices(wallet.address, asset)
-          const entryPrice = Number(entry8) / 1e8
-          const marginWei = await contract.margins(wallet.address, asset)
-          const margin = ethers.formatUnits(marginWei, 18)
-          const pnlRaw: bigint = await contract.getUnrealizedPnl(wallet.address, asset)
-          const pnl = (Number(pnlRaw) / 1e6).toFixed(2)
-          const size = (Number(positionSize) / 1e10).toFixed(4)
+              const size = Number(ethers.formatUnits(positionSize, 18))
+              const margin = Number(ethers.formatUnits(marginWei, 18))
 
-          setPositionDetails((prev) => ({
-            ...prev,
-            [asset]: { ...prev[asset], size, entryPrice, margin, pnl },
-          }))
-        } else {
-          setPositionDetails((prev) => {
-            const newDetails = { ...prev }
-            delete newDetails[asset]
-            return newDetails
-          })
+              // PnL = (current_price - entry_price) * position_size
+              const pnlValue = (currentPrice - entryPrice) * Math.abs(size)
+              pnl = pnlValue.toFixed(2)
+
+              console.log(
+                `[v0] PnL for ${asset}: Entry=${entryPrice}, Current=${currentPrice}, Size=${size}, PnL=${pnl}`,
+              )
+            } catch (error) {
+              console.error(`[v0] Error calculating PnL for ${asset}:`, error)
+              // Try to use contract's PnL as fallback
+              try {
+                const pnlRaw: bigint = await contract.getUnrealizedPnl(wallet.address, asset)
+                pnl = Number(ethers.formatUnits(pnlRaw, 18)).toFixed(2)
+              } catch (e) {
+                console.error(`[v0] Contract PnL also failed for ${asset}:`, e)
+              }
+            }
+
+            loadedPositions.push({
+              asset,
+              size: Number(ethers.formatUnits(positionSize, 18)).toFixed(6),
+              entryPrice: (Number(entry8) / 1e8).toFixed(2),
+              margin: Number(ethers.formatUnits(marginWei, 18)).toFixed(2),
+              pnl,
+              direction: Number(positionSize) > 0 ? "LONG" : "SHORT",
+            })
+          }
         }
+        setPositions(loadedPositions)
+      } catch (error) {
+        console.error("[v0] Error loading positions:", error)
       }
-    } catch (error) {
-      console.error("Error checking positions:", error)
     }
-  }
+    loadPositions()
+    const interval = setInterval(loadPositions, 15000)
+    return () => clearInterval(interval)
+  }, [wallet, provider])
 
-  const checkTpSlTriggers = async () => {
+  useEffect(() => {
     if (!price) return
-
-    for (const [asset, pos] of Object.entries(positionDetails)) {
-      if (asset !== pair || (!pos.tp && !pos.sl)) continue
-
-      const tp = Number.parseFloat(pos.tp || "0")
-      const sl = Number.parseFloat(pos.sl || "0")
-      const currentPrice = price
-
-      const shouldClose = (tp > 0 && currentPrice >= tp) || (sl > 0 && currentPrice <= sl)
-
-      if (shouldClose) {
-        await closePosition(
-          asset,
-          `Auto-closed ${asset} - ${currentPrice >= tp ? "Take Profit" : "Stop Loss"} hit at $${currentPrice}`,
-        )
-      }
-    }
-  }
-
-  const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert("Please install MetaMask or use a Web3 browser")
-      return
-    }
-    try {
-      await switchToArc()
-      const provider = new ethers.BrowserProvider(window.ethereum)
-      await provider.send("eth_requestAccounts", [])
-      const signer = await provider.getSigner()
-      const address = await signer.getAddress()
-      setProvider(provider)
-      setWallet({ provider, signer, address })
-    } catch (error) {
-      console.error("Connection error:", error)
-      alert("Failed to connect wallet")
-    }
-  }
+    const bids = Array.from({ length: 10 }, (_, i) => ({
+      price: (price - (i + 1) * 10).toFixed(1),
+      size: (Math.random() * 2).toFixed(3),
+    }))
+    const asks = Array.from({ length: 10 }, (_, i) => ({
+      price: (price + (i + 1) * 10).toFixed(1),
+      size: (Math.random() * 2).toFixed(3),
+    }))
+    setOrderBookBids(bids)
+    setOrderBookAsks(asks.reverse())
+  }, [price])
 
   const executeTrade = async (isLong: boolean) => {
     if (!wallet) {
-      await connectWallet()
+      alert("Please connect your wallet using the button in the navigation bar")
       return
     }
     if (!amount || Number(amount) <= 0) {
@@ -289,475 +279,265 @@ export default function TradePage() {
       return
     }
 
-    // Check if user already has a position for this asset
-    if (hasPosition[pair]) {
-      alert(`You already have an open position for ${pair}. Close it first before opening a new one.`)
-      return
-    }
-
     try {
       setLoading(true)
-
       const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, wallet.signer)
 
-      // Fetch and update price on-chain
       const price8 = await fetchCoinGeckoPrice(pair)
       const updateTx = await contract.updatePrice(pair, price8)
       await updateTx.wait()
 
-      // Open position (leverage is positive for long, negative for short)
       const marginWei = ethers.parseUnits(amount, 18)
-      const lev = isLong ? leverage : -leverage // Negative leverage for short
+      const lev = isLong ? leverage : -leverage
 
       const tx = await contract.openPosition(pair, lev, { value: marginWei })
       await tx.wait()
 
-      setHasPosition((prev) => ({ ...prev, [pair]: true }))
-
-      // Fetch position details
-      const positionSize: bigint = await contract.positionSizes(wallet.address, pair)
-      const entry8 = await contract.entryPrices(wallet.address, pair)
-      const entryPrice = Number(entry8) / 1e8
-      const marginWei2 = await contract.margins(wallet.address, pair)
-      const margin = ethers.formatUnits(marginWei2, 18)
-      const size = (Number(positionSize) / 1e10).toFixed(4)
-
-      setPositionDetails((prev) => ({
-        ...prev,
-        [pair]: {
-          size,
-          entryPrice,
-          margin,
-          pnl: "0.00",
-          tp: tpPrice,
-          sl: slPrice,
-          direction: isLong ? "Long" : "Short",
-        },
-      }))
-
-      alert(`Opened ${Math.abs(lev)}x ${pair} ${isLong ? "LONG" : "SHORT"} position with ${amount} USDC margin!`)
-      setTpPrice("")
-      setSlPrice("")
+      alert(`Opened ${Math.abs(lev)}x ${pair} ${isLong ? "LONG" : "SHORT"} position!`)
       setAmount("")
-
-      // Update balance
-      const bal = await provider.getBalance(wallet.address)
-      const balanceFormatted = ethers.formatUnits(bal, 18)
-      setBalance(balanceFormatted)
     } catch (error: any) {
-      console.error("Trade error:", error)
-      let errorMsg = "Transaction failed: "
-      if (error.reason) {
-        errorMsg += error.reason
-      } else if (error.message) {
-        errorMsg += error.message
-      } else {
-        errorMsg += "Unknown error"
-      }
-      alert(errorMsg)
+      console.error("[v0] Trade error:", error)
+      alert(`Transaction failed: ${error.reason || error.message}`)
     } finally {
       setLoading(false)
     }
   }
 
-  const closePosition = async (asset: string, customMsg?: string) => {
+  const closePosition = async (asset: string) => {
     if (!wallet) return
     try {
       setLoading(true)
       const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, wallet.signer)
       const tx = await contract.closePosition(asset)
       await tx.wait()
-
-      setHasPosition((prev) => ({ ...prev, [asset]: false }))
-      setPositionDetails((prev) => {
-        const newDetails = { ...prev }
-        delete newDetails[asset]
-        return newDetails
-      })
-
-      alert(customMsg || `Closed ${asset} position successfully!`)
-
-      const bal = await provider.getBalance(wallet.address)
-      const balanceFormatted = ethers.formatUnits(bal, 18)
-      setBalance(balanceFormatted)
+      alert(`Closed ${asset} position successfully!`)
     } catch (error) {
-      console.error("Close position error:", error)
+      console.error("[v0] Close position error:", error)
       alert("Failed to close position")
     } finally {
       setLoading(false)
     }
   }
 
-  const chartData = {
-    labels: priceHistory.labels,
-    datasets: [
-      {
-        label: `${pair} Price`,
-        data: priceHistory.data,
-        borderColor: "rgb(34, 197, 94)",
-        backgroundColor: "rgba(34, 197, 94, 0.1)",
-        tension: 0.4,
-      },
-    ],
-  }
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: false,
-      },
-      tooltip: {
-        mode: "index" as const,
-        intersect: false,
-      },
-    },
-    scales: {
-      y: {
-        ticks: {
-          color: "rgb(156, 163, 175)",
-        },
-        grid: {
-          color: "rgba(156, 163, 175, 0.1)",
-        },
-      },
-      x: {
-        ticks: {
-          color: "rgb(156, 163, 175)",
-          maxRotation: 0,
-        },
-        grid: {
-          display: false,
-        },
-      },
-    },
-  }
-
   return (
-    <div className="min-h-screen bg-background text-foreground p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-          Arc Perps DEX
-        </h1>
-        <div className="flex gap-3 items-center">
-          {wallet && (
-            <div className="text-sm bg-card px-4 py-2 rounded-lg border border-border">
-              <div className="text-muted-foreground">Balance</div>
-              <div className="font-bold">{Number(balance).toFixed(2)} USDC</div>
-            </div>
-          )}
-          <Button onClick={connectWallet} className="bg-gradient-to-r from-primary to-accent">
-            {wallet ? `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}` : "Connect Wallet"}
-          </Button>
+    <div className="bg-black text-white min-h-screen">
+      <div className="border-b border-gray-800 p-3">
+        <div className="flex items-center gap-4 flex-wrap text-sm">
+          <div className="relative">
+            <button
+              onClick={() => setShowMarketDropdown(!showMarketDropdown)}
+              className="flex items-center gap-3 px-4 py-2 bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors"
+            >
+              <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-orange-600 rounded-full" />
+              <span className="text-xl font-bold">{pair}/USDC</span>
+              <ChevronDown className="w-4 h-4" />
+            </button>
+
+            {showMarketDropdown && (
+              <div className="absolute top-full mt-2 left-0 bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50 w-64 max-h-96 overflow-y-auto">
+                <div className="p-2 border-b border-gray-700">
+                  <input
+                    type="text"
+                    placeholder="Search markets..."
+                    className="w-full px-3 py-2 bg-gray-800 rounded border border-gray-700 focus:border-blue-500 focus:outline-none text-sm"
+                  />
+                </div>
+                <div className="p-1">
+                  {ASSETS.map((asset) => (
+                    <button
+                      key={asset}
+                      onClick={() => {
+                        setPair(asset)
+                        setShowMarketDropdown(false)
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded hover:bg-gray-800 transition-colors ${
+                        pair === asset ? "bg-gray-800" : ""
+                      }`}
+                    >
+                      <div className="font-semibold">{asset}/USDC</div>
+                      <div className="text-xs text-gray-400">{COINGECKO_IDS[asset]}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <span className="text-lg">{leverage}x</span>
+          <span className="text-2xl font-bold">
+            ${price?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || "..."}
+          </span>
+          <span className={priceChange >= 0 ? "text-green-500" : "text-red-500"}>
+            24h {priceChange >= 0 ? "+" : ""}
+            {priceChange.toFixed(2)}%
+          </span>
+          <span className="text-gray-400">24h Volume ${(volume24h / 1e9).toFixed(2)}B</span>
         </div>
       </div>
 
-      <Tabs defaultValue="trade" className="w-full">
-        <TabsList className="grid w-full max-w-md grid-cols-2 mb-6">
-          <TabsTrigger value="trade">Trade</TabsTrigger>
-          <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="trade">
-          <div className="flex gap-3 mb-4 flex-wrap">
-            {ASSETS.map((p) => (
-              <Button
-                key={p}
-                variant={pair === p ? "default" : "outline"}
-                onClick={() => setPair(p)}
-                className={pair === p ? "bg-gradient-to-r from-primary to-accent" : ""}
+      <div className="flex">
+        <div className="flex-1 p-4">
+          <div className="flex gap-2 mb-4">
+            {["1m", "5m", "15m", "30m", "1h", "4h", "1D"].map((tf) => (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                className={`px-3 py-1 rounded ${timeframe === tf ? "bg-blue-600" : "bg-gray-800 hover:bg-gray-700"}`}
               >
-                {p}/USDC
-              </Button>
+                {tf}
+              </button>
             ))}
           </div>
 
-          <div className="mb-4 bg-card p-4 rounded-lg border border-border">
-            <div className="flex justify-between items-start">
-              <div>
-                <div className="text-sm text-muted-foreground mb-1">{pair}/USDC</div>
-                <div className="flex items-center gap-3">
-                  <div className="text-3xl font-bold">
-                    {price
-                      ? `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                      : "Loading..."}
-                  </div>
-                  {priceChange !== 0 && (
-                    <div className={`text-sm font-medium ${priceChange > 0 ? "text-success" : "text-destructive"}`}>
-                      {priceChange > 0 ? "+" : ""}
-                      {priceChange.toFixed(2)}%
-                    </div>
-                  )}
+          <div id="tv-chart" className="bg-[#0a0a0f] rounded-lg h-[500px]" />
+        </div>
+
+        <div className="w-96 border-l border-gray-800 flex flex-col">
+          <div className="p-4 border-b border-gray-800">
+            <h3 className="font-bold mb-3">Order Book</h3>
+            <div className="space-y-0.5 text-xs font-mono">
+              {orderBookAsks.map((ask, i) => (
+                <div key={i} className="grid grid-cols-3 text-right">
+                  <span className="text-red-500">{ask.price}</span>
+                  <span className="text-gray-400">{ask.size}</span>
+                  <span className="text-gray-600">-</span>
                 </div>
-              </div>
-              {lastUpdate && (
-                <div className="text-xs text-muted-foreground">
-                  Updated {Math.floor((Date.now() - lastUpdate.getTime()) / 1000)}s ago
+              ))}
+              <div className="text-center py-1 border-y border-gray-700 text-gray-500">{price?.toFixed(1)}</div>
+              {orderBookBids.map((bid, i) => (
+                <div key={i} className="grid grid-cols-3 text-right">
+                  <span className="text-green-500">{bid.price}</span>
+                  <span className="text-gray-400">{bid.size}</span>
+                  <span className="text-gray-600">-</span>
                 </div>
-              )}
-            </div>
-            <div className="text-xs text-muted-foreground mt-2">Live price from CoinGecko</div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 space-y-4">
-              <div id="tv-chart" className="h-[400px] bg-card rounded-lg border border-border" />
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Price History (Last 20 updates)</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-[200px]">
-                    <Line data={chartData} options={chartOptions} />
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="bg-card p-6 rounded-lg border border-border h-fit">
-              <h2 className="text-xl font-bold mb-4">Trade</h2>
-
-              {hasPosition[pair] && positionDetails[pair] && (
-                <div className="mb-4 p-4 bg-primary/10 border border-primary/30 rounded-lg">
-                  <div className="text-sm font-bold text-primary mb-2">Active {pair} Position</div>
-                  <div className="space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Size:</span>
-                      <span className="font-medium">
-                        {positionDetails[pair].size} {pair}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Entry Price:</span>
-                      <span className="font-medium">${positionDetails[pair].entryPrice.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Margin:</span>
-                      <span className="font-medium">{Number(positionDetails[pair].margin).toFixed(2)} USDC</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Unrealized PnL:</span>
-                      <span
-                        className={`font-bold ${Number(positionDetails[pair].pnl) >= 0 ? "text-success" : "text-destructive"}`}
-                      >
-                        {Number(positionDetails[pair].pnl) >= 0 ? "+" : ""}
-                        {positionDetails[pair].pnl} USDC
-                      </span>
-                    </div>
-                    {positionDetails[pair].tp && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Take Profit:</span>
-                        <span className="font-medium text-success">${positionDetails[pair].tp}</span>
-                      </div>
-                    )}
-                    {positionDetails[pair].sl && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Stop Loss:</span>
-                        <span className="font-medium text-destructive">${positionDetails[pair].sl}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="mb-4">
-                <label className="text-sm text-muted-foreground mb-2 block">Margin (USDC)</label>
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full p-3 bg-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-              </div>
-
-              <div className="mb-4">
-                <div className="flex justify-between items-center mb-2">
-                  <label className="text-sm text-muted-foreground">Leverage</label>
-                  <span className="text-lg font-bold text-primary">{leverage}x</span>
-                </div>
-                <div className="flex gap-2 mb-3">
-                  {[2, 5, 10, 25, 50].map((lev) => (
-                    <Button
-                      key={lev}
-                      size="sm"
-                      variant={leverage === lev ? "default" : "outline"}
-                      onClick={() => setLeverage(lev)}
-                      className={leverage === lev ? "bg-primary" : ""}
-                    >
-                      {lev}x
-                    </Button>
-                  ))}
-                </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="50"
-                  value={leverage}
-                  onChange={(e) => setLeverage(Number(e.target.value))}
-                  className="w-full h-2 bg-background rounded-lg appearance-none cursor-pointer accent-primary"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                  <span>1x</span>
-                  <span>50x</span>
-                </div>
-              </div>
-
-              {!hasPosition[pair] && (
-                <>
-                  <div className="mb-3">
-                    <label className="text-sm text-muted-foreground mb-2 block">Take Profit Price (Optional)</label>
-                    <input
-                      type="number"
-                      value={tpPrice}
-                      onChange={(e) => setTpPrice(e.target.value)}
-                      placeholder="e.g. 95000"
-                      className="w-full p-3 bg-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-success"
-                    />
-                  </div>
-                  <div className="mb-4">
-                    <label className="text-sm text-muted-foreground mb-2 block">Stop Loss Price (Optional)</label>
-                    <input
-                      type="number"
-                      value={slPrice}
-                      onChange={(e) => setSlPrice(e.target.value)}
-                      placeholder="e.g. 85000"
-                      className="w-full p-3 bg-background rounded-lg border border-border focus:outline-none focus:ring-2 focus:ring-destructive"
-                    />
-                  </div>
-                </>
-              )}
-
-              {amount && price && (
-                <div className="mb-4 p-3 bg-muted/50 rounded-lg text-sm">
-                  <div className="flex justify-between mb-1">
-                    <span className="text-muted-foreground">Position Size:</span>
-                    <span className="font-medium">${(Number(amount) * price).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-muted-foreground">With {leverage}x Leverage:</span>
-                    <span className="font-bold text-primary">${(Number(amount) * price * leverage).toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Required Margin:</span>
-                    <span className="font-medium">${(Number(amount) * price).toFixed(2)} USDC</span>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-3">
-                <Button
-                  onClick={() => executeTrade(true)}
-                  disabled={loading || !amount || hasPosition[pair]}
-                  className="flex-1 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700"
-                >
-                  {loading ? "Processing..." : hasPosition[pair] ? "Position Open" : "Open Long"}
-                </Button>
-                <Button
-                  onClick={() => executeTrade(false)}
-                  disabled={loading || !amount || hasPosition[pair]}
-                  className="flex-1 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700"
-                >
-                  {loading ? "Processing..." : hasPosition[pair] ? "Position Open" : "Open Short"}
-                </Button>
-              </div>
-
-              {hasPosition[pair] && (
-                <Button
-                  onClick={() => closePosition(pair)}
-                  disabled={loading}
-                  variant="outline"
-                  className="w-full mt-3 border-primary text-primary hover:bg-primary hover:text-primary-foreground"
-                >
-                  {loading ? "Closing..." : "Close Position"}
-                </Button>
-              )}
-
-              <p className="text-xs text-muted-foreground mt-4 text-center">
-                TP/SL will auto-close your position when triggered
-              </p>
+              ))}
             </div>
           </div>
-        </TabsContent>
 
-        <TabsContent value="portfolio">
-          <Card>
-            <CardHeader>
-              <CardTitle>Your Positions</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {Object.keys(positionDetails).length === 0 ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p className="text-lg mb-2">No open positions</p>
-                  <p className="text-sm">Head to the Trade tab to open your first position!</p>
+          <div className="p-4 flex-1">
+            <div className="flex gap-2 mb-4">
+              <button className="flex-1 py-2 bg-gray-800 rounded text-sm">CROSS</button>
+              <button className="flex-1 py-2 bg-gray-800 rounded text-sm">{leverage}x</button>
+            </div>
+
+            <p className="text-sm mb-3 text-gray-400">
+              Available {usdcBalance !== null ? usdcBalance.toFixed(2) : "0.00"} USDC
+            </p>
+
+            <div className="mb-4">
+              <label className="text-sm text-gray-400 block mb-2">Margin (USDC)</label>
+              <input
+                type="number"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+                className="w-full p-3 bg-gray-900 rounded border border-gray-700 focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="text-sm text-gray-400 block mb-2">Leverage {leverage}x</label>
+              <input
+                type="range"
+                min="1"
+                max="50"
+                value={leverage}
+                onChange={(e) => setLeverage(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                <span>1x</span>
+                <span>50x</span>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mb-4">
+              <Button
+                onClick={() => executeTrade(true)}
+                disabled={loading}
+                className="flex-1 py-4 bg-green-600 hover:bg-green-500 text-white font-bold rounded"
+              >
+                <ArrowUpRight className="mr-2" /> LONG
+              </Button>
+              <Button
+                onClick={() => executeTrade(false)}
+                disabled={loading}
+                className="flex-1 py-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded"
+              >
+                <ArrowDownRight className="mr-2" /> SHORT
+              </Button>
+            </div>
+
+            {amount && price && (
+              <div className="text-xs text-gray-400 space-y-1 p-3 bg-gray-900 rounded">
+                <div className="flex justify-between">
+                  <span>Position Size:</span>
+                  <span>
+                    {((Number(amount) * leverage) / price).toFixed(4)} {pair}
+                  </span>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  {Object.entries(positionDetails).map(([asset, pos]) => (
-                    <Card key={asset} className="bg-muted/30">
-                      <CardContent className="p-4">
-                        <div className="flex justify-between items-start mb-3">
-                          <div>
-                            <h3 className="font-bold text-lg">{asset}/USDC</h3>
-                            <p className="text-sm text-muted-foreground">
-                              {pos.direction === "Long" ? "Long" : "Short"} Position
-                            </p>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => closePosition(asset)}
-                            disabled={loading}
-                          >
-                            Close
-                          </Button>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                          <div>
-                            <span className="text-muted-foreground">Size:</span>
-                            <p className="font-medium">
-                              {pos.size} {asset}
-                            </p>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">Entry:</span>
-                            <p className="font-medium">${pos.entryPrice.toFixed(2)}</p>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">Margin:</span>
-                            <p className="font-medium">{Number(pos.margin).toFixed(2)} USDC</p>
-                          </div>
-                          <div>
-                            <span className="text-muted-foreground">PnL:</span>
-                            <p className={`font-bold ${Number(pos.pnl) >= 0 ? "text-success" : "text-destructive"}`}>
-                              {Number(pos.pnl) >= 0 ? "+" : ""}
-                              {pos.pnl} USDC
-                            </p>
-                          </div>
-                          {pos.tp && (
-                            <div>
-                              <span className="text-muted-foreground">Take Profit:</span>
-                              <p className="font-medium text-success">${pos.tp}</p>
-                            </div>
-                          )}
-                          {pos.sl && (
-                            <div>
-                              <span className="text-muted-foreground">Stop Loss:</span>
-                              <p className="font-medium text-destructive">${pos.sl}</p>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                <div className="flex justify-between">
+                  <span>Entry Price:</span>
+                  <span>${price.toFixed(2)}</span>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-gray-800 p-4">
+        <div className="flex gap-6 mb-4">
+          <button className="font-bold text-blue-400 border-b-2 border-blue-400 pb-2">
+            POSITIONS ({positions.length})
+          </button>
+        </div>
+
+        {positions.length > 0 ? (
+          <div className="space-y-2">
+            {positions.map((pos) => (
+              <div key={pos.asset} className="bg-gray-900 p-4 rounded-lg flex justify-between items-center">
+                <div className="flex gap-6">
+                  <div>
+                    <div className="text-xs text-gray-400">Asset</div>
+                    <div className="font-bold">{pos.asset}/USDC</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-400">Direction</div>
+                    <div className={pos.direction === "LONG" ? "text-green-500" : "text-red-500"}>{pos.direction}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-400">Size</div>
+                    <div>
+                      {pos.size} {pos.asset}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-400">Entry</div>
+                    <div>${pos.entryPrice}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-400">Margin</div>
+                    <div>{Number(pos.margin).toFixed(2)} USDC</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-400">PnL</div>
+                    <div className={Number(pos.pnl) >= 0 ? "text-green-500" : "text-red-500"}>
+                      {Number(pos.pnl) >= 0 ? "+" : ""}
+                      {pos.pnl} USDC
+                    </div>
+                  </div>
+                </div>
+                <Button onClick={() => closePosition(pos.asset)} disabled={loading} variant="destructive" size="sm">
+                  Close
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-center text-gray-500 py-8">No open positions</p>
+        )}
+      </div>
     </div>
   )
 }

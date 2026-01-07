@@ -1,27 +1,39 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState, useEffect } from "react"
 import { ethers } from "ethers"
-import { Navigation } from "@/components/navigation"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Trophy, Medal, Award, RefreshCw } from "lucide-react"
+import { RefreshCw } from "lucide-react"
+import { CONTRACTS, ARC_PERP_VAULT_ABI, weiToUsdc } from "@/lib/contracts"
 
-const CONTRACT_ADDRESS = "0xc41452a842674160bE59CF0bbEa003EB2ddD31b2"
 const FALLBACK_RPC = "https://5042002.rpc.thirdweb.com"
 
-const PERP_ABI = [
-  "function getPrice(string asset) view returns (uint256)",
-  "function positionSizes(address user, string asset) view returns (int256)",
-  "event PositionOpened(address indexed user, string asset, int256 size, uint256 price, uint256 margin)",
-]
+interface TradeRecord {
+  user: string
+  margin: number
+  leverage: number
+  isLong: boolean
+  entryPrice: number
+  exitPrice: number
+  pnl: number
+  timestamp: number
+}
 
-const ASSETS = ["BTC", "ETH"]
+interface LeaderboardEntry {
+  address: string
+  totalPnl: number
+  tradeCount: number
+  winRate: number
+  bestTrade: number
+}
 
 export default function LeaderboardPage() {
-  const [leaderboard, setLeaderboard] = useState<Array<{ user: string; totalValue: number; rank: number }>>([])
-  const [loading, setLoading] = useState(false)
-  const [provider, setProvider] = useState<any>(null)
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
+  const [recentTrades, setRecentTrades] = useState<TradeRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [tab, setTab] = useState<"today" | "alltime">("today")
+  const [provider, setProvider] = useState<ethers.BrowserProvider | ethers.JsonRpcProvider | null>(null)
 
   useEffect(() => {
     const prov =
@@ -30,55 +42,84 @@ export default function LeaderboardPage() {
         : new ethers.JsonRpcProvider(FALLBACK_RPC)
 
     setProvider(prov)
-    fetchLeaderboard(prov)
   }, [])
 
-  const fetchLeaderboard = async (prov = provider) => {
-    if (!prov) return
-    setLoading(true)
+  useEffect(() => {
+    if (provider) {
+      fetchLeaderboardData()
+      const interval = setInterval(fetchLeaderboardData, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [provider, tab])
+
+  const fetchLeaderboardData = async () => {
+    if (!provider) return
 
     try {
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, prov)
+      setLoading(true)
 
-      const filter = contract.filters.PositionOpened()
-      const logs = await contract.queryFilter(filter, -10000) // Last 10k blocks
+      const vaultContract = new ethers.Contract(CONTRACTS.ARC_PERP_VAULT, ARC_PERP_VAULT_ABI, provider)
 
-      // Get unique users
-      const uniqueUsers = [...new Set(logs.map((log: any) => log.args.user))]
+      // Fetch recent trades
+      const trades = await vaultContract.getRecentTrades(100)
 
-      const rankings: Array<{ user: string; totalValue: number }> = []
-
-      for (const user of uniqueUsers.slice(0, 20)) {
-        let userValue = 0
-
-        for (const asset of ASSETS) {
-          try {
-            const sizeRaw: bigint = await contract.positionSizes(user, asset)
-            const size = Math.abs(Number(sizeRaw)) / 1e10 // Absolute value
-
-            if (size > 0) {
-              const price8 = await contract.getPrice(asset)
-              const price = Number(price8) / 1e8
-              userValue += size * price
-            }
-          } catch (error) {
-            // Skip if error reading position
-            continue
-          }
-        }
-
-        if (userValue > 0) {
-          rankings.push({ user, totalValue: userValue })
-        }
-      }
-
-      rankings.sort((a, b) => b.totalValue - a.totalValue)
-      const rankedData = rankings.slice(0, 10).map((entry, index) => ({
-        ...entry,
-        rank: index + 1,
+      const formattedTrades: TradeRecord[] = trades.map((trade: any) => ({
+        user: trade.user,
+        margin: weiToUsdc(trade.margin),
+        leverage: Number(trade.leverage),
+        isLong: trade.isLong,
+        entryPrice: Number(trade.entryPrice) / 1e8,
+        exitPrice: Number(trade.exitPrice) / 1e8,
+        pnl: weiToUsdc(BigInt(trade.pnl.toString())),
+        timestamp: Number(trade.timestamp),
       }))
 
-      setLeaderboard(rankedData)
+      setRecentTrades(formattedTrades)
+
+      // Calculate leaderboard
+      const userStats = new Map<
+        string,
+        {
+          totalPnl: number
+          tradeCount: number
+          wins: number
+          bestTrade: number
+        }
+      >()
+
+      const now = Date.now() / 1000
+      const oneDayAgo = now - 86400
+
+      formattedTrades.forEach((trade) => {
+        if (tab === "today" && trade.timestamp < oneDayAgo) return
+
+        const existing = userStats.get(trade.user) || {
+          totalPnl: 0,
+          tradeCount: 0,
+          wins: 0,
+          bestTrade: 0,
+        }
+
+        existing.totalPnl += trade.pnl
+        existing.tradeCount += 1
+        if (trade.pnl > 0) existing.wins += 1
+        if (trade.pnl > existing.bestTrade) existing.bestTrade = trade.pnl
+
+        userStats.set(trade.user, existing)
+      })
+
+      const entries: LeaderboardEntry[] = Array.from(userStats.entries())
+        .map(([address, stats]) => ({
+          address,
+          totalPnl: stats.totalPnl,
+          tradeCount: stats.tradeCount,
+          winRate: (stats.wins / stats.tradeCount) * 100,
+          bestTrade: stats.bestTrade,
+        }))
+        .sort((a, b) => b.totalPnl - a.totalPnl)
+        .slice(0, 10)
+
+      setLeaderboard(entries)
     } catch (error) {
       console.error("Error fetching leaderboard:", error)
     } finally {
@@ -86,64 +127,197 @@ export default function LeaderboardPage() {
     }
   }
 
+  const formatAddress = (address: string) => {
+    return `${address.slice(0, 6)}...${address.slice(-4)}`
+  }
+
   return (
     <div className="min-h-screen bg-background">
-      <Navigation />
       <main className="container mx-auto px-4 py-20">
-        <div className="mx-auto max-w-3xl">
-          <div className="mb-12 flex items-center justify-between">
+        <div className="mx-auto max-w-6xl space-y-6">
+          <div className="flex items-center justify-between">
             <h1 className="text-4xl font-bold">Leaderboard</h1>
-            <Button onClick={() => fetchLeaderboard()} disabled={loading} variant="outline" size="sm">
+            <Button onClick={fetchLeaderboardData} disabled={loading} variant="outline" size="sm">
               <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
             </Button>
           </div>
 
           {loading && leaderboard.length === 0 ? (
-            <Card className="glass-card border-border/50 p-12 text-center">
-              <p className="text-muted-foreground">Loading leaderboard...</p>
-            </Card>
-          ) : leaderboard.length === 0 ? (
-            <Card className="glass-card border-border/50 p-12 text-center">
-              <p className="text-muted-foreground">No traders yet</p>
-              <p className="mt-2 text-sm text-muted-foreground">Be the first to open a position!</p>
+            <Card className="glass-card border-border/50 p-12">
+              <div className="animate-pulse space-y-4">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="h-12 bg-muted rounded"></div>
+                ))}
+              </div>
             </Card>
           ) : (
-            <div className="space-y-4">
-              {leaderboard.map((trader) => (
-                <Card
-                  key={trader.user}
-                  className={`glass-card border-border/50 p-6 transition-all hover:border-primary/50 ${
-                    trader.rank <= 3 ? "border-primary/30" : ""
+            <>
+              {/* Tab Selector */}
+              <div className="flex gap-2 bg-card rounded-lg p-1 border border-border/50">
+                <button
+                  onClick={() => setTab("today")}
+                  className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                    tab === "today"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-primary to-secondary text-xl font-bold text-white">
-                        {trader.rank === 1 && <Trophy className="h-6 w-6" />}
-                        {trader.rank === 2 && <Medal className="h-6 w-6" />}
-                        {trader.rank === 3 && <Award className="h-6 w-6" />}
-                        {trader.rank > 3 && `#${trader.rank}`}
-                      </div>
-                      <div>
-                        <p className="text-lg font-bold">
-                          {trader.user.slice(0, 6)}...{trader.user.slice(-4)}
-                        </p>
-                        <p className="text-sm text-muted-foreground">Trader</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold text-success">${trader.totalValue.toFixed(2)}</p>
-                      <p className="text-sm text-muted-foreground">Total Position Value</p>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
+                  Today
+                </button>
+                <button
+                  onClick={() => setTab("alltime")}
+                  className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                    tab === "alltime"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  All Time
+                </button>
+              </div>
 
-          <p className="mt-8 text-center text-sm text-muted-foreground">
-            Rankings based on total open position value across all assets
-          </p>
+              {/* Leaderboard */}
+              <Card className="glass-card border-border/50 overflow-hidden">
+                <div className="p-6 border-b border-border/50">
+                  <h2 className="text-2xl font-bold">🏆 Top Traders</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {tab === "today" ? "Best performers today" : "All-time rankings"}
+                  </p>
+                </div>
+
+                {leaderboard.length === 0 ? (
+                  <div className="p-6 text-center text-muted-foreground">No trades yet. Be the first to trade!</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">
+                            Rank
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">
+                            Trader
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Total PnL
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Win Rate
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Trades
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Best Trade
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/50">
+                        {leaderboard.map((entry, index) => (
+                          <tr key={entry.address} className="hover:bg-muted/30">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className="text-2xl">
+                                {index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className="font-mono font-medium">{formatAddress(entry.address)}</span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-right">
+                              <span
+                                className={`font-bold ${entry.totalPnl >= 0 ? "text-success" : "text-destructive"}`}
+                              >
+                                {entry.totalPnl >= 0 ? "+" : ""}${entry.totalPnl.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-right">
+                              <span className={`${entry.winRate >= 50 ? "text-success" : "text-muted-foreground"}`}>
+                                {entry.winRate.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-right text-foreground">
+                              {entry.tradeCount}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-right">
+                              <span className="text-success font-medium">+${entry.bestTrade.toFixed(2)}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+
+              {/* Recent Trades */}
+              <Card className="glass-card border-border/50 overflow-hidden">
+                <div className="p-6 border-b border-border/50">
+                  <h3 className="text-xl font-bold">Recent Trades</h3>
+                </div>
+
+                {recentTrades.length === 0 ? (
+                  <div className="p-6 text-center text-muted-foreground">No recent trades</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead className="bg-muted/50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">
+                            Trader
+                          </th>
+                          <th className="px-6 py-3 text-center text-xs font-medium text-muted-foreground uppercase">
+                            Type
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Entry
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Exit
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            Leverage
+                          </th>
+                          <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">
+                            PnL
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/50">
+                        {recentTrades.slice(0, 10).map((trade, index) => (
+                          <tr key={index} className="hover:bg-muted/30">
+                            <td className="px-6 py-3 whitespace-nowrap font-mono text-sm">
+                              {formatAddress(trade.user)}
+                            </td>
+                            <td className="px-6 py-3 whitespace-nowrap text-center">
+                              <span
+                                className={`px-2 py-1 rounded text-xs font-medium ${
+                                  trade.isLong ? "bg-success/20 text-success" : "bg-destructive/20 text-destructive"
+                                }`}
+                              >
+                                {trade.isLong ? "LONG" : "SHORT"}
+                              </span>
+                            </td>
+                            <td className="px-6 py-3 whitespace-nowrap text-right text-sm">
+                              ${trade.entryPrice.toLocaleString()}
+                            </td>
+                            <td className="px-6 py-3 whitespace-nowrap text-right text-sm">
+                              ${trade.exitPrice.toLocaleString()}
+                            </td>
+                            <td className="px-6 py-3 whitespace-nowrap text-right text-sm">{trade.leverage}x</td>
+                            <td className="px-6 py-3 whitespace-nowrap text-right">
+                              <span className={`font-bold ${trade.pnl >= 0 ? "text-success" : "text-destructive"}`}>
+                                {trade.pnl >= 0 ? "+" : ""}${trade.pnl.toFixed(2)}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
         </div>
       </main>
     </div>
