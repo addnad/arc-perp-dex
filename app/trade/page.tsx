@@ -96,22 +96,23 @@ async function fetchCoinGeckoPrice(asset: string): Promise<bigint> {
 
 const getCoinLogoUrl = (asset: string) => {
   const coinId = COINGECKO_IDS[asset]
-  return `https://assets.coingecko.com/coins/images/${
-    {
-      bitcoin: "1",
-      ethereum: "279",
-      solana: "4128",
-      binancecoin: "825",
-      ripple: "44",
-      cardano: "5",
-      dogecoin: "1",
-      "matic-network": "12171",
-      polkadot: "12171",
-      "avalanche-2": "12559",
-      chainlink: "877",
-      uniswap: "12042",
-    }[coinId] || "1"
-  }/thumb.png`
+  const imageIdMap: Record<string, string> = {
+    bitcoin: "1",
+    ethereum: "279",
+    solana: "4128",
+    binancecoin: "825",
+    ripple: "44",
+    cardano: "5",
+    dogecoin: "5", // Fixed: was "1" (Bitcoin), now correct ID for Dogecoin
+    "matic-network": "12171",
+    polkadot: "12671", // Fixed: was "12171" (Avalanche), now correct ID for Polkadot
+    "avalanche-2": "12559",
+    chainlink: "877",
+    uniswap: "12042",
+  }
+
+  const imageId = imageIdMap[coinId] || "1"
+  return `https://assets.coingecko.com/coins/images/${imageId}/original.png`
 }
 
 export default function TradePage() {
