@@ -1,10 +1,35 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { TrendingUp, Zap, Shield } from "lucide-react"
+import { TrendingUp, Zap, Shield, Wallet } from "lucide-react"
 import Link from "next/link"
+import { useWallet } from "@/lib/wallet-context"
 
 export function Hero() {
+  const { wallet, isConnecting, connect } = useWallet()
+
+  const handleConnect = async () => {
+    try {
+      await connect()
+    } catch (error: any) {
+      console.error("Error connecting wallet:", error)
+      const errorMessage = error.message || "Failed to connect wallet. Please try again."
+
+      if (errorMessage.includes("preview mode")) {
+        alert(
+          "🔒 Preview Mode Limitation\n\n" +
+            "Wallet connection doesn't work in v0 preview due to security restrictions.\n\n" +
+            "✅ To test wallet features:\n" +
+            "• Click 'Publish' (top right) to deploy to Vercel\n" +
+            "• Or download and run locally\n\n" +
+            "Your wallet will work perfectly once deployed! 🚀",
+        )
+      } else {
+        alert(errorMessage)
+      }
+    }
+  }
+
   return (
     <section className="relative overflow-hidden">
       {/* Animated gradient background */}
@@ -36,20 +61,25 @@ export function Hero() {
           </p>
 
           {/* CTA buttons */}
-          <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
-            <Link href="/trade">
-              <Button size="lg" className="glow-primary group h-14 px-8 text-lg font-semibold">
+          <div className="flex w-full flex-col items-center justify-center gap-3 sm:gap-4 md:flex-row">
+            <Link href="/trade" className="w-full sm:w-auto">
+              <Button
+                size="lg"
+                className="glow-primary group h-12 sm:h-14 w-full px-6 sm:px-8 text-base sm:text-lg font-semibold"
+              >
                 Start Trading
-                <TrendingUp className="ml-2 h-5 w-5 transition-transform group-hover:translate-x-1" />
+                <TrendingUp className="ml-2 h-4 sm:h-5 w-4 sm:w-5 transition-transform group-hover:translate-x-1" />
               </Button>
             </Link>
             <Button
               size="lg"
               variant="outline"
-              className="h-14 px-8 text-lg font-semibold backdrop-blur-sm bg-transparent"
+              className="h-12 sm:h-14 w-full sm:w-auto px-6 sm:px-8 text-base sm:text-lg font-semibold backdrop-blur-sm bg-transparent"
+              onClick={handleConnect}
+              disabled={isConnecting || !!wallet}
             >
-              <Shield className="mr-2 h-5 w-5" />
-              Connect Wallet
+              <Wallet className="mr-2 h-4 sm:h-5 w-4 sm:w-5" />
+              {wallet ? "Connected" : isConnecting ? "Connecting..." : "Connect Wallet"}
             </Button>
           </div>
 

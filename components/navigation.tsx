@@ -47,17 +47,23 @@ export function Navigation() {
 
           {/* Desktop menu */}
           <div className="hidden items-center gap-8 md:flex">
-            <Link href="/" className="text-sm font-medium transition-colors hover:text-primary">
+            <Link
+              href="/"
+              className="rounded-lg bg-gradient-to-r from-blue-500/20 to-blue-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-blue-500/40 hover:to-blue-500/20 hover:shadow-lg"
+            >
               Markets
             </Link>
-            <Link href="/trade" className="text-sm font-medium transition-colors hover:text-primary">
+            <Link
+              href="/trade"
+              className="rounded-lg bg-gradient-to-r from-purple-500/20 to-purple-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-purple-500/40 hover:to-purple-500/20 hover:shadow-lg"
+            >
               Trade
             </Link>
-            <Link href="/portfolio" className="text-sm font-medium transition-colors hover:text-primary">
+            <Link
+              href="/portfolio"
+              className="rounded-lg bg-gradient-to-r from-green-500/20 to-green-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-green-500/40 hover:to-green-500/20 hover:shadow-lg"
+            >
               Portfolio
-            </Link>
-            <Link href="/leaderboard" className="text-sm font-medium transition-colors hover:text-primary">
-              Leaderboard
             </Link>
           </div>
 
@@ -118,17 +124,23 @@ export function Navigation() {
         {mobileMenuOpen && (
           <div className="border-t border-border/50 py-4 md:hidden">
             <div className="flex flex-col gap-4">
-              <Link href="/" className="text-sm font-medium">
+              <Link
+                href="/"
+                className="rounded-lg bg-gradient-to-r from-blue-500/20 to-blue-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-blue-500/40 hover:to-blue-500/20"
+              >
                 Markets
               </Link>
-              <Link href="/trade" className="text-sm font-medium">
+              <Link
+                href="/trade"
+                className="rounded-lg bg-gradient-to-r from-purple-500/20 to-purple-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-purple-500/40 hover:to-purple-500/20"
+              >
                 Trade
               </Link>
-              <Link href="/portfolio" className="text-sm font-medium">
+              <Link
+                href="/portfolio"
+                className="rounded-lg bg-gradient-to-r from-green-500/20 to-green-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-green-500/40 hover:to-green-500/20"
+              >
                 Portfolio
-              </Link>
-              <Link href="/leaderboard" className="text-sm font-medium">
-                Leaderboard
               </Link>
               <Link href="/faucet" target="_blank" rel="noopener noreferrer">
                 <Button

@@ -19,6 +19,13 @@ interface DisplayPrice {
   price: number
 }
 
+const cryptoIcons: Record<string, string> = {
+  bitcoin: "https://assets.coingecko.com/coins/images/1/large/bitcoin.png",
+  ethereum: "https://assets.coingecko.com/coins/images/279/large/ethereum.png",
+  solana: "https://assets.coingecko.com/coins/images/4128/large/solana.png",
+  "avalanche-2": "https://assets.coingecko.com/coins/images/12559/large/coin-round-red.png",
+}
+
 export function Markets() {
   const [prices, setPrices] = useState<DisplayPrice[]>([])
   const [loading, setLoading] = useState(true)
@@ -75,9 +82,21 @@ export function Markets() {
             {prices.map((crypto) => (
               <Link key={crypto.id} href={`/trade?pair=${crypto.symbol}`}>
                 <Card className="glass-card group relative overflow-hidden border-border/50 p-6 transition-all hover:scale-105 hover:border-primary/50">
-                  <div className="mb-4">
-                    <h3 className="text-2xl font-bold">{crypto.symbol}/USDC</h3>
-                    <p className="text-sm text-muted-foreground">{crypto.name}</p>
+                  <div className="mb-4 flex items-center gap-3">
+                    <div className="h-12 w-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center overflow-hidden">
+                      <img
+                        src={cryptoIcons[crypto.id] || "/placeholder.svg"}
+                        alt={crypto.name}
+                        className="h-full w-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none"
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <h3 className="text-2xl font-bold">{crypto.symbol}/USDC</h3>
+                      <p className="text-sm text-muted-foreground">{crypto.name}</p>
+                    </div>
                   </div>
 
                   <div className="mb-4">

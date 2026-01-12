@@ -65,13 +65,12 @@ const TRADINGVIEW_PAIRS: Record<string, string> = {
 }
 
 const priceCache = new Map<string, { price: number; timestamp: number }>()
-const CACHE_DURATION = 30000 // 30 seconds
+const CACHE_DURATION = 300000 // 5 minutes
 
 async function fetchCoinGeckoPrice(asset: string): Promise<bigint> {
   // Check cache first
   const cached = priceCache.get(asset)
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-    console.log(`[v0] Using cached price for ${asset}: ${cached.price}`)
     return BigInt(Math.floor(cached.price * 1e8))
   }
 
@@ -89,11 +88,30 @@ async function fetchCoinGeckoPrice(asset: string): Promise<bigint> {
     console.error(`[v0] Error fetching price for ${asset}:`, error)
     // Return cached price if available, even if expired
     if (cached) {
-      console.log(`[v0] Using expired cache for ${asset}: ${cached.price}`)
       return BigInt(Math.floor(cached.price * 1e8))
     }
     throw error
   }
+}
+
+const getCoinLogoUrl = (asset: string) => {
+  const coinId = COINGECKO_IDS[asset]
+  return `https://assets.coingecko.com/coins/images/${
+    {
+      bitcoin: "1",
+      ethereum: "279",
+      solana: "4128",
+      binancecoin: "825",
+      ripple: "44",
+      cardano: "5",
+      dogecoin: "1",
+      "matic-network": "12171",
+      polkadot: "12171",
+      "avalanche-2": "12559",
+      chainlink: "877",
+      uniswap: "12042",
+    }[coinId] || "1"
+  }/thumb.png`
 }
 
 export default function TradePage() {
@@ -148,7 +166,7 @@ export default function TradePage() {
       }
     }
     loadMarketData()
-    const interval = setInterval(loadMarketData, 10000)
+    const interval = setInterval(loadMarketData, 60000)
     return () => clearInterval(interval)
   }, [pair])
 
@@ -187,7 +205,7 @@ export default function TradePage() {
       if (!wallet || !provider) return
       try {
         const bal = await provider.getBalance(wallet.address)
-        setBalance(ethers.formatUnits(bal, 18))
+        setBalance(Number(ethers.formatUnits(bal, 18)))
       } catch (error) {
         console.error("Error fetching balance:", error)
       }
@@ -204,10 +222,18 @@ export default function TradePage() {
 
         for (const asset of ASSETS) {
           const positionSize: bigint = await contract.positionSizes(wallet.address, asset)
-          if (positionSize !== 0n) {
-            const entry8 = await contract.entryPrices(wallet.address, asset)
-            const marginWei = await contract.margins(wallet.address, asset)
+          const entry8 = await contract.entryPrices(wallet.address, asset)
+          const marginWei = await contract.margins(wallet.address, asset)
 
+          console.log(`[v0] Position data for ${asset}:`)
+          console.log(`[v0] - Raw positionSize: ${positionSize.toString()}`)
+          console.log(`[v0] - Raw entry8: ${entry8.toString()}`)
+          console.log(`[v0] - Raw marginWei: ${marginWei.toString()}`)
+          console.log(`[v0] - Formatted size (18 decimals): ${ethers.formatUnits(positionSize, 18)}`)
+          console.log(`[v0] - Entry price: ${Number(entry8) / 1e8}`)
+          console.log(`[v0] - Margin: ${ethers.formatUnits(marginWei, 18)}`)
+
+          if (positionSize !== 0n) {
             let pnl = "0.00"
             try {
               const currentPrice8 = await fetchCoinGeckoPrice(asset)
@@ -275,7 +301,7 @@ export default function TradePage() {
       return
     }
     if (!amount || Number(amount) <= 0) {
-      alert("Please enter amount")
+      alert("Please enter a valid amount")
       return
     }
 
@@ -291,13 +317,14 @@ export default function TradePage() {
       const lev = isLong ? leverage : -leverage
 
       const tx = await contract.openPosition(pair, lev, { value: marginWei })
-      await tx.wait()
+      const receipt = await tx.wait()
 
-      alert(`Opened ${Math.abs(lev)}x ${pair} ${isLong ? "LONG" : "SHORT"} position!`)
       setAmount("")
+
+      await loadPositionsData()
     } catch (error: any) {
       console.error("[v0] Trade error:", error)
-      alert(`Transaction failed: ${error.reason || error.message}`)
+      alert(`Transaction Failed: ${error.reason || error.message || "Unknown error occurred"}`)
     } finally {
       setLoading(false)
     }
@@ -308,14 +335,91 @@ export default function TradePage() {
     try {
       setLoading(true)
       const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, wallet.signer)
+
+      const positionSize = await contract.positionSizes(wallet.address, asset)
+      const entry8 = await contract.entryPrices(wallet.address, asset)
+      const marginWei = await contract.margins(wallet.address, asset)
+      console.log(`[v0] Closing position for ${asset}:`)
+      console.log(`[v0] Raw position size from contract: ${positionSize.toString()}`)
+      console.log(`[v0] Entry price (8 decimals): ${entry8.toString()}`)
+      console.log(`[v0] Margin (18 decimals): ${marginWei.toString()}`)
+      console.log(`[v0] Formatted position size: ${ethers.formatUnits(positionSize, 18)}`)
+
       const tx = await contract.closePosition(asset)
       await tx.wait()
-      alert(`Closed ${asset} position successfully!`)
+
+      if (provider) {
+        const bal = await provider.getBalance(wallet.address)
+        setBalance(Number(ethers.formatUnits(bal, 18)))
+        console.log(`[v0] New balance after close: ${ethers.formatUnits(bal, 18)} USDC`)
+      }
+
+      await loadPositionsData()
     } catch (error) {
       console.error("[v0] Close position error:", error)
-      alert("Failed to close position")
+      alert("An error occurred while closing your position")
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadPositionsData = async () => {
+    if (!wallet || !provider) return
+    try {
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, PERP_ABI, provider)
+      const loadedPositions = []
+
+      for (const asset of ASSETS) {
+        const positionSize: bigint = await contract.positionSizes(wallet.address, asset)
+        const entry8 = await contract.entryPrices(wallet.address, asset)
+        const marginWei = await contract.margins(wallet.address, asset)
+
+        console.log(`[v0] Position data for ${asset}:`)
+        console.log(`[v0] - Raw positionSize: ${positionSize.toString()}`)
+        console.log(`[v0] - Raw entry8: ${entry8.toString()}`)
+        console.log(`[v0] - Raw marginWei: ${marginWei.toString()}`)
+        console.log(`[v0] - Formatted size (18 decimals): ${ethers.formatUnits(positionSize, 18)}`)
+        console.log(`[v0] - Entry price: ${Number(entry8) / 1e8}`)
+        console.log(`[v0] - Margin: ${ethers.formatUnits(marginWei, 18)}`)
+
+        if (positionSize !== 0n) {
+          let pnl = "0.00"
+          try {
+            const currentPrice8 = await fetchCoinGeckoPrice(asset)
+            const entryPrice = Number(entry8) / 1e8
+            const currentPrice = Number(currentPrice8) / 1e8
+
+            const size = Number(ethers.formatUnits(positionSize, 18))
+            const margin = Number(ethers.formatUnits(marginWei, 18))
+
+            // PnL = (current_price - entry_price) * position_size
+            const pnlValue = (currentPrice - entryPrice) * Math.abs(size)
+            pnl = pnlValue.toFixed(2)
+
+            console.log(`[v0] PnL for ${asset}: Entry=${entryPrice}, Current=${currentPrice}, Size=${size}, PnL=${pnl}`)
+          } catch (error) {
+            console.error(`[v0] Error calculating PnL for ${asset}:`, error)
+            try {
+              const pnlRaw: bigint = await contract.getUnrealizedPnl(wallet.address, asset)
+              pnl = Number(ethers.formatUnits(pnlRaw, 18)).toFixed(2)
+            } catch (e) {
+              console.error(`[v0] Contract PnL also failed for ${asset}:`, e)
+            }
+          }
+
+          loadedPositions.push({
+            asset,
+            size: Number(ethers.formatUnits(positionSize, 18)).toFixed(6),
+            entryPrice: (Number(entry8) / 1e8).toFixed(2),
+            margin: Number(ethers.formatUnits(marginWei, 18)).toFixed(2),
+            pnl,
+            direction: Number(positionSize) > 0 ? "LONG" : "SHORT",
+          })
+        }
+      }
+      setPositions(loadedPositions)
+    } catch (error) {
+      console.error("[v0] Error loading positions:", error)
     }
   }
 
@@ -328,7 +432,15 @@ export default function TradePage() {
               onClick={() => setShowMarketDropdown(!showMarketDropdown)}
               className="flex items-center gap-3 px-4 py-2 bg-gray-900 hover:bg-gray-800 rounded-lg transition-colors"
             >
-              <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-orange-600 rounded-full" />
+              <img
+                src={getCoinLogoUrl(pair) || "/placeholder.svg"}
+                alt={pair}
+                className="w-8 h-8 rounded-full object-cover"
+                onError={(e) => {
+                  ;(e.target as HTMLImageElement).src =
+                    `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%234f46e5'/%3E%3Ctext x='50' y='50' fontSize='50' textAnchor='middle' dominantBaseline='middle' fill='white' fontWeight='bold'%3E${pair[0]}%3C/text%3E%3C/svg%3E`
+                }}
+              />
               <span className="text-xl font-bold">{pair}/USDC</span>
               <ChevronDown className="w-4 h-4" />
             </button>
@@ -350,12 +462,23 @@ export default function TradePage() {
                         setPair(asset)
                         setShowMarketDropdown(false)
                       }}
-                      className={`w-full text-left px-3 py-2 rounded hover:bg-gray-800 transition-colors ${
+                      className={`w-full text-left px-3 py-2 rounded hover:bg-gray-800 transition-colors flex items-center gap-3 ${
                         pair === asset ? "bg-gray-800" : ""
                       }`}
                     >
-                      <div className="font-semibold">{asset}/USDC</div>
-                      <div className="text-xs text-gray-400">{COINGECKO_IDS[asset]}</div>
+                      <img
+                        src={getCoinLogoUrl(asset) || "/placeholder.svg"}
+                        alt={asset}
+                        className="w-6 h-6 rounded-full object-cover"
+                        onError={(e) => {
+                          ;(e.target as HTMLImageElement).src =
+                            `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%234f46e5'/%3E%3Ctext x='50' y='50' fontSize='50' textAnchor='middle' dominantBaseline='middle' fill='white' fontWeight='bold'%3E${asset[0]}%3C/text%3E%3C/svg%3E`
+                        }}
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold">{asset}/USDC</div>
+                        <div className="text-xs text-gray-400">{COINGECKO_IDS[asset]}</div>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -493,49 +616,67 @@ export default function TradePage() {
           </button>
         </div>
 
-        {positions.length > 0 ? (
-          <div className="space-y-2">
+        {positions.length === 0 ? (
+          <div className="text-center py-12 text-gray-400">
+            <p className="text-lg">No open positions yet</p>
+            <p className="text-sm mt-2">Open your first position using the trading panel</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {positions.map((pos) => (
-              <div key={pos.asset} className="bg-gray-900 p-4 rounded-lg flex justify-between items-center">
-                <div className="flex gap-6">
+              <div
+                key={pos.asset}
+                className="bg-gray-900 border border-gray-700 rounded-lg p-4 hover:border-gray-600 transition-colors"
+              >
+                <div className="flex items-start justify-between mb-3">
                   <div>
-                    <div className="text-xs text-gray-400">Asset</div>
-                    <div className="font-bold">{pos.asset}/USDC</div>
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <img
+                        src={getCoinLogoUrl(pos.asset) || "/placeholder.svg"}
+                        alt={pos.asset}
+                        className="w-6 h-6 rounded-full"
+                      />
+                      {pos.asset}/USDC
+                    </h3>
+                    <p
+                      className={`text-sm font-medium ${pos.direction === "LONG" ? "text-green-500" : "text-red-500"}`}
+                    >
+                      {pos.direction}
+                    </p>
                   </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Direction</div>
-                    <div className={pos.direction === "LONG" ? "text-green-500" : "text-red-500"}>{pos.direction}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Size</div>
-                    <div>
-                      {pos.size} {pos.asset}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Entry</div>
-                    <div>${pos.entryPrice}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">Margin</div>
-                    <div>{Number(pos.margin).toFixed(2)} USDC</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-gray-400">PnL</div>
-                    <div className={Number(pos.pnl) >= 0 ? "text-green-500" : "text-red-500"}>
-                      {Number(pos.pnl) >= 0 ? "+" : ""}
-                      {pos.pnl} USDC
-                    </div>
+                  <div className={`text-right ${Number(pos.pnl) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    <p className="text-sm text-gray-400">PnL</p>
+                    <p className="text-lg font-bold">${pos.pnl}</p>
                   </div>
                 </div>
-                <Button onClick={() => closePosition(pos.asset)} disabled={loading} variant="destructive" size="sm">
-                  Close
-                </Button>
+
+                <div className="space-y-2 mb-4 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Size</span>
+                    <span className="font-medium">
+                      {pos.size} {pos.asset}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Entry Price</span>
+                    <span className="font-medium">${pos.entryPrice}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Margin</span>
+                    <span className="font-medium">{pos.margin} USDC</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => closePosition(pos.asset)}
+                  disabled={loading}
+                  className="w-full py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-lg font-medium transition-colors"
+                >
+                  {loading ? "Closing..." : "Close Position"}
+                </button>
               </div>
             ))}
           </div>
-        ) : (
-          <p className="text-center text-gray-500 py-8">No open positions</p>
         )}
       </div>
     </div>
