@@ -129,6 +129,53 @@
   }
 }
 
+/* Add custom animations for button hover effects */
+@layer utilities {
+  @keyframes button-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 20px oklch(0.65 0.22 235 / 0.5), 0 0 30px oklch(0.65 0.22 235 / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px oklch(0.65 0.22 235 / 0.8), 0 0 40px oklch(0.65 0.22 235 / 0.5);
+    }
+  }
+
+  @keyframes button-scale {
+    0% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.05);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  @keyframes button-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.8;
+    }
+  }
+
+  .animate-button-glow {
+    animation: button-glow 2s ease-in-out infinite;
+  }
+
+  .animate-button-scale {
+    animation: button-scale 0.6s ease-out;
+  }
+
+  .hover\:animate-button-scale:hover {
+    animation: button-scale 0.6s ease-out;
+  }
+}
+
 /* Add glassmorphism and glow effects */
 .glass-card {
   background: linear-gradient(135deg, oklch(0.15 0.02 265 / 0.8), oklch(0.12 0.015 265 / 0.6));

@@ -1,7 +1,7 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { Activity, Menu, X, Wallet, LogOut, Droplet } from "lucide-react"
+import { Activity, Menu, X, Wallet, LogOut, Droplet, BookOpen } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
 import { useWallet } from "@/lib/wallet-context"
@@ -65,6 +65,15 @@ export function Navigation() {
             >
               Portfolio
             </Link>
+            <a
+              href="https://docs.arc.network/arc/concepts/welcome-to-arc"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg bg-gradient-to-r from-cyan-500/20 to-cyan-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-cyan-500/40 hover:to-cyan-500/20 hover:shadow-lg flex items-center gap-2"
+            >
+              <BookOpen className="h-4 w-4" />
+              Docs
+            </a>
           </div>
 
           {/* Connect wallet button */}
@@ -152,6 +161,15 @@ export function Navigation() {
                   Faucet
                 </Button>
               </Link>
+              <a
+                href="https://docs.arc.network/arc/concepts/welcome-to-arc"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg bg-gradient-to-r from-cyan-500/20 to-cyan-500/10 px-4 py-2 text-sm font-medium transition-all duration-300 hover:from-cyan-500/40 hover:to-cyan-500/20 flex items-center gap-2"
+              >
+                <BookOpen className="h-4 w-4" />
+                Docs
+              </a>
               {wallet ? (
                 <>
                   {usdcBalance !== null && (
